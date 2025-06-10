@@ -4,6 +4,7 @@ _A=False
 
 import pygame, math, sys, numpy as np, random, os, time
 from ollama import chat, ChatResponse
+import numba
 
 FULLSCREEN=_B
 RENDER_SCALE=.125
@@ -37,6 +38,9 @@ print(textures_folder)
 
 with open('lore.txt', 'r', encoding='utf-8') as file:
     lore = file.read()
+
+with open('intro_lore.txt', 'r', encoding='utf-8') as file:
+    intro_lore = file.read()
 
 def update_ray_params(w):
     global NUM_RAYS, DELTA_ANGLE, DIST_PLANE, COS_REL, SIN_REL
@@ -208,7 +212,6 @@ class NPC:
         if get_tile(int(self.x // TILE), int(ny // TILE), 0) == 0:
             self.y = ny
 
-# ── ray-caster with correct wall anchoring ────────────────────────────────────
 def ray_cast(screen, player, col_cache, scale_factor):
     global depth_buffer
 
@@ -595,11 +598,91 @@ def render_inventory_hud(screen, player, item_textures, pos=(10, 10), slot_size=
                 name_rect = name_surf.get_rect(center=(rect.centerx, rect.bottom + 12))
                 screen.blit(name_surf, name_rect)
 
+def play_music(path, loop=True):
+    try:
+        pygame.mixer.music.load(path)
+        pygame.mixer.music.play(-1 if loop else 0)
+        print(f"Playing music: {path}")
+    except Exception as e:
+        print(f"Failed to play music '{path}': {e}")
+
+def run_intro(screen, lore_text):
+    play_music(os.path.join("sounds", "intro_music.mp3"), loop=True)
+    clock = pygame.time.Clock()
+    font = pygame.font.SysFont('Courier New', 14, bold=True)
+    width, height = screen.get_size()
+    lines = []
+
+    # Split lore into lines that fit the screen width
+    words = lore_text.split()
+    line = ''
+    for w in words:
+        test_line = line + w + ' '
+        if font.size(test_line)[0] > width - 40:
+            lines.append(line)
+            line = w + ' '
+        else:
+            line = test_line
+    if line:
+        lines.append(line)
+
+    # Rolling variables
+    current_line = 0
+    char_index = 0
+    finished = False
+    skip = False
+    intro_text = ''
+
+    while not finished and not skip:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+            elif event.type == pygame.KEYDOWN:
+                if event.key in (pygame.K_RETURN, pygame.K_SPACE, pygame.K_ESCAPE):
+                    skip = True  # skip the intro on key press
+
+        screen.fill((0, 0, 0))
+
+        # Build the currently visible text (character rolling)
+        if current_line < len(lines):
+            if char_index < len(lines[current_line]):
+                char_index += 1
+            else:
+                # pause briefly on full line, then go to next line
+                pygame.time.wait(500)
+                current_line += 1
+                char_index = 0
+        else:
+            finished = True
+
+        # Compose text to render: all fully displayed lines + partial current line
+        visible_text = '\n'.join(lines[:current_line])
+        if current_line < len(lines):
+            visible_text += '\n' + lines[current_line][:char_index]
+
+        # Render text lines with some vertical spacing
+        y = height // 4
+        for render_line in visible_text.split('\n'):
+            text_surf = font.render(render_line, True, (255, 255, 255))
+            screen.blit(text_surf, (20, y))
+            y += font.get_height() + 5
+
+        # Instruction prompt
+        prompt = font.render("Press Enter or Space to skip...", True, (180, 180, 180))
+        screen.blit(prompt, (width - prompt.get_width() - 20, height - 40))
+
+        pygame.display.flip()
+        clock.tick(30)
+
+    pygame.mixer.music.stop()
+
 def main():
     global SCREEN_WIDTH, SCREEN_HEIGHT, show_fps, FONT, depth_buffer
     global dialogue_active, input_active, input_text, ai_response, scroll_offset
     bob_timer = 0.0
     pygame.init()
+    pygame.mixer.init()
     pygame.mouse.set_visible(_A)
     pygame.event.set_grab(_B)
     load_ussa_map('city_map.ussa3d')
@@ -610,8 +693,10 @@ def main():
     update_ray_params(SCREEN_WIDTH)
     gs = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
     item_textures = load_item_textures()
+    run_intro(disp, intro_lore)
+    play_music(os.path.join("sounds", "game_music.mp3"), loop=True)
     p = Player()
-    p.inventory = ['notebook', 'cat']
+    p.inventory = ['notebook']
     p.held_item = item_textures.get('notebook')  # or None if no item held
     p.select_item(0, item_textures)       # Start holding first item
     p.x, p.y = find_empty_spawn(p.layer)
